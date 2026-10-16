@@ -1,3 +1,7 @@
+> [!WARNING]
+> ⚠️ **Vibe Coding Warning** ⚠️
+> This fork was built using **Vibe Coding** (AI-assisted development). Please review the code and use it at your own discretion.
+
 # Nothing Clock
 
 ### Welcome to the official repository for the Nothing Clock app! <br />
