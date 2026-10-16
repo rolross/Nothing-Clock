@@ -46,7 +46,7 @@ class WorldMap extends StatelessWidget {
           currentLocationCoords.dx - 1, 
           currentLocationCoords.dy - 2, 
           true, 
-          Colors.red,
+          Color(0xFFD71921),
           otherLocationPinColor
         ),
         
@@ -60,7 +60,7 @@ class WorldMap extends StatelessWidget {
             clockCoords.dx - 1, 
             clockCoords.dy - 2, 
             false, 
-            Colors.red,
+            Color(0xFFD71921),
             otherLocationPinColor
           );
         }).toList(),

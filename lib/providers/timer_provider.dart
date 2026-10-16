@@ -1,390 +1,348 @@
 import 'dart:async';
-import 'dart:isolate';
-import 'dart:ui';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/services/timer_service.dart';
+import 'package:nothing_clock/services/sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
-import 'package:audioplayers/audioplayers.dart';
 
-/// A provider that manages the timer state and ensures it persists
-/// when navigating between screens and when the app is closed.
-class TimerProvider with ChangeNotifier {
-  // Timer properties
-  int _totalSeconds = 6 * 60 + 4; // Default: 6:04
-  int _remainingSeconds = 6 * 60 + 4;
-  int _originalTotalSeconds = 6 * 60 + 4;
-  bool _isRunning = false;
-  bool _isCompleted = false;
+String formatTimerSeconds(int seconds) {
+  final s = seconds < 0 ? 0 : seconds;
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final sec = s % 60;
+  final mm = m.toString().padLeft(2, '0');
+  final ss = sec.toString().padLeft(2, '0');
+  return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
+}
+
+class SavedTimer {
+  final String id;
+  String name;
+  int seconds;
+
+  SavedTimer({required this.id, required this.name, required this.seconds});
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'seconds': seconds};
+
+  factory SavedTimer.fromJson(Map<String, dynamic> j) => SavedTimer(
+        id: j['id'] as String,
+        name: (j['name'] as String?) ?? '',
+        seconds: (j['seconds'] as int?) ?? 60,
+      );
+}
+
+class TimerProvider with ChangeNotifier, WidgetsBindingObserver {
+  List<SavedTimer> _timers = [];
+  String? _activeId;
+  String _state = 'idle'; // idle | running | paused | completed
+  int _totalSeconds = 0;
+  int _remainingSeconds = 0;
+  DateTime? _endTime;
+  bool _viewing = false;
   bool _isPickerMode = false;
-  
-  // Timer start timestamp for persistence
-  DateTime? _startTimestamp;
-  DateTime? _pauseTimestamp;
-  
-  // Timer sound
-  AudioPlayer? _audioPlayer;
-  
-  // Timer for UI updates
-  Timer? _uiTimer;
-  
-  // Timer picker duration
-  Duration _pickerDuration = const Duration(hours: 0, minutes: 6, seconds: 4);
-  
-  // Timer ID for the background service
-  static const int _timerId = 4242;
-  
-  // Constructor - loads timer state from preferences
+  Duration _pickerDuration = Duration.zero;
+  Timer? _ui;
+
   TimerProvider() {
-    _audioPlayer = AudioPlayer();
-    _loadTimerState();
-    _setupTimerCallback();
+    WidgetsBinding.instance.addObserver(this);
+    TimerService.changes.addListener(_syncFromPrefs);
+    SyncService.remoteApplied.addListener(_onRemoteApplied);
+    _init();
   }
-  
-  // Getters
-  int get totalSeconds => _totalSeconds;
-  int get remainingSeconds => _remainingSeconds;
-  int get originalTotalSeconds => _originalTotalSeconds;
-  bool get isRunning => _isRunning;
-  bool get isCompleted => _isCompleted;
+
+  List<SavedTimer> get timers => _timers;
+  bool get viewing => _viewing;
+  bool get isRunning => _state == 'running';
+  bool get isCompleted => _state == 'completed';
   bool get isPickerMode => _isPickerMode;
   Duration get pickerDuration => _pickerDuration;
-  
-  /// Setup timer callback for background service
-  void _setupTimerCallback() {
-    // Register a port for communication with background isolate
-    final ReceivePort port = ReceivePort();
-    IsolateNameServer.registerPortWithName(port.sendPort, 'timer_port');
-    
-    // Listen for messages from the background service
-    port.listen((dynamic message) {
-      if (message is Map) {
-        if (message.containsKey('backgroundTick')) {
-          // Background tick received, update the timer
-          updateRemainingTime();
-        }
-      }
-    });
+  int get remainingSeconds => _remainingSeconds;
+  int get totalSeconds => _totalSeconds;
+  String? get activeId => _activeId;
+  bool get hasActive => _activeId != null && _state != 'idle';
+
+  SavedTimer? get activeTimer {
+    for (final t in _timers) {
+      if (t.id == _activeId) return t;
+    }
+    return null;
   }
-  
-  /// Update the remaining time based on the elapsed time
-  void updateRemainingTime() {
-    if (_isRunning && !_isCompleted && _startTimestamp != null) {
-      final elapsedSeconds = DateTime.now().difference(_startTimestamp!).inSeconds;
-      _remainingSeconds = _totalSeconds - elapsedSeconds;
-      
-      // Check if timer has completed
-      if (_remainingSeconds <= 0) {
+
+  double get progress {
+    if (_state == 'completed') return 1.0;
+    if (_totalSeconds <= 0) return 0.0;
+    final totalMs = _totalSeconds * 1000;
+    if (_state == 'running' && _endTime != null) {
+      final leftMs = _endTime!.difference(DateTime.now()).inMilliseconds;
+      return (1 - leftMs / totalMs).clamp(0.0, 1.0).toDouble();
+    }
+    return (1 - _remainingSeconds / _totalSeconds).clamp(0.0, 1.0).toDouble();
+  }
+
+  Future<void> _init() async {
+    await _loadSaved();
+    await _syncFromPrefs();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _syncFromPrefs();
+  }
+
+  Future<void> _loadSaved() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('saved_timers') ?? [];
+      _timers = list
+          .map((s) => SavedTimer.fromJson(jsonDecode(s) as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('Error loading timers: $e');
+    }
+  }
+
+  Future<void> _saveTimers() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+        'saved_timers', _timers.map((t) => jsonEncode(t.toJson())).toList());
+    SyncService.markDirty();
+  }
+
+  Future<void> _onRemoteApplied() async {
+    await _loadSaved();
+    notifyListeners();
+  }
+
+  Future<void> _syncFromPrefs() async {
+    final s = await TimerService.loadState();
+    _activeId = s.activeId;
+    _totalSeconds = s.total;
+    _endTime = s.end;
+    _state = s.state;
+    if (_activeId == null) {
+      _state = 'idle';
+      _viewing = false;
+      _isPickerMode = false;
+    }
+    switch (_state) {
+      case 'running':
+        _recompute();
+        break;
+      case 'paused':
+        _remainingSeconds = s.pausedRemaining;
+        break;
+      default:
         _remainingSeconds = 0;
-        _onTimerComplete();
-      }
-      
-      notifyListeners();
+    }
+    _manageUiTimer();
+    notifyListeners();
+  }
+
+  void _recompute() {
+    if (_endTime == null) return;
+    final ms = _endTime!.difference(DateTime.now()).inMilliseconds;
+    if (ms <= 0) {
+      _remainingSeconds = 0;
+      _state = 'completed';
+    } else {
+      _remainingSeconds = (ms + 999) ~/ 1000;
     }
   }
-  
-  /// Load timer state from shared preferences
-  Future<void> _loadTimerState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // Load basic timer properties
-      _totalSeconds = prefs.getInt('timer_total_seconds') ?? _totalSeconds;
-      _originalTotalSeconds = prefs.getInt('timer_original_total_seconds') ?? _originalTotalSeconds;
-      _isCompleted = prefs.getBool('timer_is_completed') ?? false;
-      _remainingSeconds = prefs.getInt('timer_remaining_seconds') ?? _totalSeconds;
-      
-      // Load active state
-      final wasRunning = prefs.getBool('timer_is_running') ?? false;
-      
-      // Only restore active timer if it was running
-      if (wasRunning && !_isCompleted) {
-        // Load timestamps for active timer
-        final startMs = prefs.getInt('timer_start_timestamp');
-        
-        if (startMs != null) {
-          _startTimestamp = DateTime.fromMillisecondsSinceEpoch(startMs);
-          
-          // Calculate current remaining time based on elapsed time
-          final elapsedSeconds = DateTime.now().difference(_startTimestamp!).inSeconds;
-          _remainingSeconds = _totalSeconds - elapsedSeconds;
-          
-          // Check if timer should have completed while app was closed
-          if (_remainingSeconds <= 0) {
-            _isCompleted = true;
-            _isRunning = false;
-            _remainingSeconds = 0;
-          } else {
-            // Resume the timer
-            _isRunning = true;
-            _startTimerInBackground();
-          }
+
+  void _manageUiTimer() {
+    if (_state == 'running') {
+      _ui ??= Timer.periodic(const Duration(milliseconds: 250), (_) {
+        _recompute();
+        if (_state != 'running') {
+          _ui?.cancel();
+          _ui = null;
         }
-      }
-      
+        notifyListeners();
+      });
+    } else {
+      _ui?.cancel();
+      _ui = null;
+    }
+  }
+
+  // ---------- Saved timers ----------
+
+  Future<void> addTimer(String name, int seconds) async {
+    _timers.add(SavedTimer(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: name,
+      seconds: seconds,
+    ));
+    await _saveTimers();
+    notifyListeners();
+  }
+
+  Future<void> updateTimer(SavedTimer t, String name, int seconds) async {
+    t.name = name;
+    t.seconds = seconds;
+    await _saveTimers();
+    if (_activeId == t.id) {
+      await TimerService.updateName(name);
+    }
+    notifyListeners();
+  }
+
+  Future<void> deleteTimer(SavedTimer t) async {
+    if (_activeId == t.id) {
+      await stopActive();
+    }
+    _timers.removeWhere((x) => x.id == t.id);
+    await _saveTimers();
+    notifyListeners();
+  }
+
+  // ---------- Running timer ----------
+
+  Future<void> playSaved(SavedTimer t) async {
+    _isPickerMode = false;
+    if (_activeId == t.id && (_state == 'running' || _state == 'paused')) {
+      _viewing = true;
       notifyListeners();
-    } catch (e) {
-      debugPrint('Error loading timer state: $e');
-    }
-  }
-  
-  /// Save timer state to shared preferences
-  Future<void> _saveTimerState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // Save basic timer properties
-      await prefs.setInt('timer_total_seconds', _totalSeconds);
-      await prefs.setInt('timer_remaining_seconds', _remainingSeconds);
-      await prefs.setInt('timer_original_total_seconds', _originalTotalSeconds);
-      await prefs.setBool('timer_is_running', _isRunning);
-      await prefs.setBool('timer_is_completed', _isCompleted);
-      
-      // Only save the start timestamp if the timer is running
-      if (_isRunning && _startTimestamp != null) {
-        await prefs.setInt('timer_start_timestamp', _startTimestamp!.millisecondsSinceEpoch);
-      } else {
-        await prefs.remove('timer_start_timestamp');
+      if (_state == 'paused') {
+        await toggle();
       }
-      
-      // We don't need to save the pause timestamp anymore
-      await prefs.remove('timer_pause_timestamp');
-    } catch (e) {
-      debugPrint('Error saving timer state: $e');
-    }
-  }
-  
-  /// Background timer callback
-  static void _backgroundTimerCallback() {
-    // Send a message to the main isolate to update the timer
-    final SendPort? sendPort = IsolateNameServer.lookupPortByName('timer_port');
-    if (sendPort != null) {
-      sendPort.send({'backgroundTick': true});
-    }
-  }
-  
-  /// Start the timer in background
-  void _startTimerInBackground() {
-    // Set start timestamp if not set
-    _startTimestamp ??= DateTime.now();
-    _pauseTimestamp = null;
-    
-    // Setup periodic background timer
-    AndroidAlarmManager.periodic(
-      const Duration(seconds: 1),
-      _timerId,
-      _backgroundTimerCallback,
-      exact: true,
-      wakeup: true,
-      rescheduleOnReboot: true,
-    );
-    
-    // Start a foreground timer for UI updates
-    _startUiTimer();
-    
-    _saveTimerState();
-  }
-  
-  /// Start a foreground timer for updating the UI
-  void _startUiTimer() {
-    // Cancel any existing timer
-    _uiTimer?.cancel();
-    
-    // Create a new timer that fires every second
-    _uiTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (_isRunning && !_isCompleted) {
-        updateRemainingTime();
-      } else {
-        // Stop the timer if we're not running
-        timer.cancel();
-      }
-    });
-  }
-  
-  /// Start the timer
-  void startTimer() {
-    // When starting from a paused state, create a new start timestamp
-    // based on the current remaining time
-    _startTimestamp = DateTime.now().subtract(Duration(seconds: _totalSeconds - _remainingSeconds));
-    _pauseTimestamp = null;
-    _isRunning = true;
-    
-    // Start background and UI timers
-    _startTimerInBackground();
-    notifyListeners();
-  }
-  
-  /// Pause the timer
-  void pauseTimer() {
-    _isRunning = false;
-    
-    // Store the remaining seconds directly, don't rely on timestamps when paused
-    _pauseTimestamp = null;
-    
-    // Stop all timers
-    _uiTimer?.cancel();
-    AndroidAlarmManager.cancel(_timerId);
-    
-    // Save the current state
-    _saveTimerState();
-    notifyListeners();
-  }
-  
-  /// Toggle timer between running and paused
-  void toggleTimer() {
-    if (_isCompleted) {
-      snoozeTimer();
       return;
     }
-    
-    if (_isRunning) {
-      pauseTimer();
+    _activeId = t.id;
+    _totalSeconds = t.seconds;
+    _remainingSeconds = t.seconds;
+    _state = 'running';
+    _endTime = DateTime.now().add(Duration(seconds: t.seconds));
+    _viewing = true;
+    _manageUiTimer();
+    notifyListeners();
+    await TimerService.start(
+      id: t.id,
+      name: t.name,
+      total: t.seconds,
+      remaining: t.seconds,
+    );
+  }
+
+  Future<void> toggle() async {
+    if (_activeId == null) return;
+    if (_state == 'running') {
+      _recompute();
+      final rem = _remainingSeconds;
+      _state = 'paused';
+      _endTime = null;
+      _manageUiTimer();
+      notifyListeners();
+      await TimerService.pause(remaining: rem, total: _totalSeconds);
+    } else if (_state == 'paused') {
+      _state = 'running';
+      _endTime = DateTime.now().add(Duration(seconds: _remainingSeconds));
+      _manageUiTimer();
+      notifyListeners();
+      await TimerService.start(
+        id: _activeId!,
+        name: activeTimer?.name ?? '',
+        total: _totalSeconds,
+        remaining: _remainingSeconds,
+      );
+    }
+  }
+
+  /// Ajuste rápido (+1/-1 min): solo afecta a esta ejecución, no se guarda.
+  Future<void> adjust(int delta) async {
+    if (_activeId == null || _state == 'completed') return;
+    _recompute();
+    final newRemaining = (_remainingSeconds + delta).clamp(1, 360000).toInt();
+    final eff = newRemaining - _remainingSeconds;
+    var newTotal = _totalSeconds + eff;
+    if (newTotal < newRemaining) newTotal = newRemaining;
+    _totalSeconds = newTotal;
+    _remainingSeconds = newRemaining;
+    if (_state == 'running') {
+      _endTime = DateTime.now().add(Duration(seconds: newRemaining));
+      notifyListeners();
+      await TimerService.start(
+        id: _activeId!,
+        name: activeTimer?.name ?? '',
+        total: newTotal,
+        remaining: newRemaining,
+      );
     } else {
-      startTimer();
+      notifyListeners();
+      await TimerService.pause(remaining: newRemaining, total: newTotal);
     }
   }
-  
-  /// Reset the timer
-  void resetTimer() {
-    _isRunning = false;
-    _isCompleted = false;
-    _remainingSeconds = _totalSeconds;
-    _startTimestamp = null;
-    _pauseTimestamp = null;
-    _uiTimer?.cancel();
-    AndroidAlarmManager.cancel(_timerId);
-    _saveTimerState();
+
+  Future<void> openPicker() async {
+    if (_activeId == null || _state == 'completed') return;
+    if (_state == 'running') await toggle();
+    _pickerDuration = Duration(seconds: activeTimer?.seconds ?? _totalSeconds);
+    _isPickerMode = true;
     notifyListeners();
   }
-  
-  /// Handle timer completion
-  void _onTimerComplete() {
-    if (_isCompleted) return; // Prevent duplicate completion
-    
-    _isCompleted = true;
-    _isRunning = false;
-    _uiTimer?.cancel();
-    
-    // Play sound
-    try {
-      _audioPlayer?.play(AssetSource('sounds/alarm.mp3'));
-      _audioPlayer?.setReleaseMode(ReleaseMode.loop);
-    } catch (e) {
-      debugPrint('Error playing sound: $e');
-    }
-    
-    _saveTimerState();
-    notifyListeners();
+
+  void updatePickerDuration(Duration d) {
+    _pickerDuration = d;
   }
-  
-  /// Snooze the timer
-  void snoozeTimer() {
-    // Stop alarm
-    try {
-      _audioPlayer?.stop();
-    } catch (e) {
-      debugPrint('Error stopping audio: $e');
-    }
-    
-    // Reset timer state
-    _isCompleted = false;
-    _isRunning = false;
-    _remainingSeconds = _totalSeconds;
-    _startTimestamp = null;
-    _pauseTimestamp = null;
-    
-    _uiTimer?.cancel();
-    AndroidAlarmManager.cancel(_timerId);
-    _saveTimerState();
-    notifyListeners();
-  }
-  
-  /// Add or subtract time
-  void adjustTime(int secondsToAdjust) {
-    final wasRunning = _isRunning;
-    
-    if (wasRunning) {
-      pauseTimer();
-    }
-    
-    // Use a large but safe maximum integer instead of infinity
-    const int maxSafeSeconds = 100 * 60 * 60; // 100 hours in seconds
-    
-    // If we're adjusting time, we need to update both total and remaining seconds
-    int newTotalSeconds = (_totalSeconds + secondsToAdjust).clamp(0, maxSafeSeconds);
-    int newRemainingSeconds = _remainingSeconds + secondsToAdjust;
-    
-    // Check if the timer would go negative
-    if (newRemainingSeconds <= 0 && !_isCompleted) {
-      // Timer is hitting zero - trigger completion
-      _totalSeconds = newTotalSeconds.clamp(1, maxSafeSeconds);
-      _remainingSeconds = 0;
-      _originalTotalSeconds = _totalSeconds;
-      _onTimerComplete();
-    } else {
-      // Normal adjustment
-      _totalSeconds = newTotalSeconds;
-      _remainingSeconds = newRemainingSeconds.clamp(0, maxSafeSeconds);
-      _originalTotalSeconds = _totalSeconds;
-    }
-    
-    _saveTimerState();
-    
-    if (wasRunning && _remainingSeconds > 0) {
-      startTimer();
+
+  Future<void> confirmPicker() async {
+    final secs = _pickerDuration.inSeconds;
+    _isPickerMode = false;
+    final t = activeTimer;
+    if (secs > 0 && t != null) {
+      t.seconds = secs;
+      await _saveTimers();
+      _totalSeconds = secs;
+      _remainingSeconds = secs;
+      notifyListeners();
+      await TimerService.pause(remaining: secs, total: secs);
     } else {
       notifyListeners();
     }
   }
-  
-  /// Toggle picker mode
-  void togglePickerMode() {
-    if (_isCompleted) {
-      snoozeTimer();
-    }
-    
-    _isPickerMode = !_isPickerMode;
-    
-    if (!_isPickerMode) {
-      // User selected a time, update the timer
-      _totalSeconds = _pickerDuration.inSeconds;
-      _remainingSeconds = _totalSeconds;
-      _originalTotalSeconds = _totalSeconds;
-      
-      // Reset the timer
-      _startTimestamp = null;
-      _pauseTimestamp = null;
-      
-      // If timer was running, restart with new duration
-      if (_isRunning) {
-        pauseTimer();
-        startTimer();
-      }
-    } else {
-      // User is entering picker mode, pause the timer
-      if (_isRunning) {
-        pauseTimer();
-      }
-      
-      // Update picker with current timer value
-      _pickerDuration = Duration(seconds: _remainingSeconds);
-    }
-    
-    _saveTimerState();
+
+  void cancelPicker() {
+    _isPickerMode = false;
     notifyListeners();
   }
-  
-  /// Update picked duration
-  void updatePickerDuration(Duration duration) {
-    _pickerDuration = duration;
+
+  Future<void> renameActive(String name) async {
+    final t = activeTimer;
+    if (t == null) return;
+    t.name = name;
+    await _saveTimers();
+    await TimerService.updateName(name);
     notifyListeners();
   }
-  
+
+  void closeView() {
+    _viewing = false;
+    _isPickerMode = false;
+    notifyListeners();
+  }
+
+  Future<void> stopActive() async {
+    _state = 'idle';
+    _activeId = null;
+    _viewing = false;
+    _isPickerMode = false;
+    _ui?.cancel();
+    _ui = null;
+    notifyListeners();
+    await TimerService.stop();
+  }
+
+  Future<void> snoozeActive() async {
+    await TimerService.snooze(1);
+  }
+
   @override
   void dispose() {
-    _uiTimer?.cancel();
-    AndroidAlarmManager.cancel(_timerId);
-    _audioPlayer?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    TimerService.changes.removeListener(_syncFromPrefs);
+    SyncService.remoteApplied.removeListener(_onRemoteApplied);
+    _ui?.cancel();
     super.dispose();
   }
-} 
+}

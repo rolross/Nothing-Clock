@@ -16,5 +16,13 @@ class Alarm extends HiveObject {
   @HiveField(3)
   int id;
 
-  Alarm({int? id, required this.time, required this.days, this.isEnabled = false}) : id = id ?? DateTime.now().millisecondsSinceEpoch % (1 << 31);
+  int uiRev = 0;
+
+  @HiveField(4, defaultValue: '')
+  String label;
+
+  @HiveField(5, defaultValue: false)
+  bool isSleep;
+
+  Alarm({int? id, required this.time, required this.days, this.isEnabled = false, this.label = '', this.isSleep = false}) : id = id ?? DateTime.now().millisecondsSinceEpoch % (1 << 31);
 }

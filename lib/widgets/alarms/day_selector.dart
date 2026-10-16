@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:nothing_clock/widgets/switch_button.dart';
 
 /// A list widget that shows the scheduled toggle and day buttons for an alarm.
@@ -31,7 +32,7 @@ class _AlarmsDaysListState extends State<AlarmsDaysList> {
   /// Computed message based on selected days
   String get _scheduledMessage {
     if (!widget.isScheduled) {
-      return "Not scheduled";
+      return tr("Not scheduled");
     }
     
     final selected = <String>[];
@@ -40,7 +41,7 @@ class _AlarmsDaysListState extends State<AlarmsDaysList> {
         selected.add(day);
       }
     }
-    return selected.isEmpty ? "Today" : selected.join(", ");
+    return selected.isEmpty ? tr("Once") : selected.map(tr).join(", ");
   }
 
   @override
@@ -79,7 +80,7 @@ class _AlarmsDaysListState extends State<AlarmsDaysList> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: _orderedDays.map((day) {
             return AlarmDayBtn(
-              dayInital: day.substring(0, 1),
+              dayInital: trInitial(day),
               dayKey: day,
               selectedDays: widget.selectedDays,
               isEnabled: widget.isScheduled,

@@ -177,7 +177,7 @@ class _StopwatchScreenState extends State<StopwatchScreen>
                   StopwatchBtnController(
                       isFilled: false,
                       filledColor: null,
-                      borderColor: Colors.red,
+                      borderColor: Color(0xFFD71921),
                       iconColor: null,
                       icon: Icons.refresh,
                       onTap: stopwatch.elapsedMilliseconds > 0

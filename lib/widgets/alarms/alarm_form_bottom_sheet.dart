@@ -1,16 +1,23 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:nothing_clock/models/alarm.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:nothing_clock/widgets/alarms/day_selector.dart';
 
 /// Bottom sheet that allows the user to pick a time and days for a new alarm.
 class AlarmFormBottomSheet extends StatefulWidget {
   /// Callback when a new alarm is saved
-  final Function(Alarm) onSave;
-  
+  final Function(Alarm)? onSave;
+  final Alarm? alarm;
+  final void Function(DateTime, Map<String, bool>, String)? onUpdate;
+  final VoidCallback? onDelete;
+
   const AlarmFormBottomSheet({
     super.key,
-    required this.onSave,
+    this.onSave,
+    this.alarm,
+    this.onUpdate,
+    this.onDelete,
   });
 
   @override
@@ -36,6 +43,32 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
   /// Whether the alarm is scheduled for specific days
   bool _isScheduled = false;
 
+  final TextEditingController _labelController = TextEditingController();
+
+  Map<String, bool> get _effectiveDays => _isScheduled
+      ? _selectedDays
+      : {for (final k in _selectedDays.keys) k: false};
+
+  @override
+  void dispose() {
+    _labelController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final a = widget.alarm;
+    if (a != null) {
+      _selectedTime = a.time;
+      _labelController.text = a.label;
+      _selectedDays = {
+        for (final e in _selectedDays.entries) e.key: a.days[e.key] ?? false
+      };
+      _isScheduled = _selectedDays.values.any((v) => v);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -55,11 +88,18 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
         child: SingleChildScrollView(
           child: Column(
             children: [
-              const Text("ADD NEW ALARM", style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(widget.alarm == null ? tr("ADD NEW ALARM") : tr("EDIT ALARM"), style: const TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
               
               // Time picker section
               _buildTimePicker(),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _labelController,
+                maxLength: 30,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(hintText: tr("ALARM NAME"), counterText: ""),
+              ),
               const SizedBox(height: 10),
               
               // Days selector widget
@@ -76,6 +116,17 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
               
               // Save button
               _buildSaveButton(theme),
+              if (widget.alarm != null && widget.onDelete != null) ...[
+                const SizedBox(height: 10),
+                TextButton(
+                  onPressed: () {
+                    widget.onDelete?.call();
+                    Navigator.pop(context);
+                  },
+                  child: Text(tr("DELETE ALARM"),
+                      style: TextStyle(color: Color(0xFFD71921), fontWeight: FontWeight.w500)),
+                ),
+              ],
             ],
           ),
         ),
@@ -93,6 +144,7 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
           height: 150,
           child: CupertinoDatePicker(
             mode: CupertinoDatePickerMode.time,
+            use24hFormat: true,
             initialDateTime: _selectedTime,
             onDateTimeChanged: (value) {
               setState(() {
@@ -114,8 +166,8 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
-      child: const Text(
-        "SAVE ALARM",
+      child: Text(
+        tr("SAVE ALARM"),
         style: TextStyle(fontFamily: "Roboto", fontWeight: FontWeight.w500),
       ),
     );
@@ -123,13 +175,11 @@ class _AlarmFormBottomSheetState extends State<AlarmFormBottomSheet> {
 
   /// Handles saving the new alarm using the provided callback.
   void _onSavePressed() {
-    // Create a new alarm with the selected settings
-    final newAlarm = Alarm(time: _selectedTime, days: _selectedDays);
-    
-    // Call the save callback provided by parent
-    widget.onSave(newAlarm);
-    
-    // Close the bottom sheet
+    if (widget.alarm != null) {
+      widget.onUpdate?.call(_selectedTime, _effectiveDays, _labelController.text.trim());
+    } else {
+      widget.onSave?.call(Alarm(time: _selectedTime, days: _effectiveDays, label: _labelController.text.trim()));
+    }
     Navigator.pop(context);
   }
 } 

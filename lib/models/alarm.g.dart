@@ -21,13 +21,15 @@ class AlarmAdapter extends TypeAdapter<Alarm> {
       time: fields[0] as DateTime,
       days: (fields[1] as Map).cast<String, bool>(),
       isEnabled: fields[2] == null ? false : fields[2] as bool,
+      label: fields[4] == null ? '' : fields[4] as String,
+      isSleep: fields[5] == null ? false : fields[5] as bool,
     );
   }
 
   @override
   void write(BinaryWriter writer, Alarm obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.time)
       ..writeByte(1)
@@ -35,7 +37,11 @@ class AlarmAdapter extends TypeAdapter<Alarm> {
       ..writeByte(2)
       ..write(obj.isEnabled)
       ..writeByte(3)
-      ..write(obj.id);
+      ..write(obj.id)
+      ..writeByte(4)
+      ..write(obj.label)
+      ..writeByte(5)
+      ..write(obj.isSleep);
   }
 
   @override

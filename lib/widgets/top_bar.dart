@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:nothing_clock/screens/city_search_screen.dart';
 import 'package:nothing_clock/screens/settings_screen.dart';
 
@@ -92,16 +93,16 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
           },
           controller: _tabController,
           isScrollable: true,
-          labelColor: Colors.red,
+          labelColor: Color(0xFFD71921),
           tabAlignment: TabAlignment.start,
           dividerColor: Colors.transparent,
           unselectedLabelColor: theme.colorScheme.onSurface,
           indicatorColor: Colors.transparent,
-          tabs: const [
-            Tab(text: "CLOCK"),
-            Tab(text: "ALARMS"),
-            Tab(text: "TIMER"),
-            Tab(text: "STOPWATCH"),
+          tabs: [
+            Tab(text: tr("CLOCK")),
+            Tab(text: tr("ALARMS")),
+            Tab(text: tr("TIMER")),
+            Tab(text: tr("STOPWATCH")),
           ],
         ),
       ),

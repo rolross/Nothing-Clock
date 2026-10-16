@@ -24,7 +24,8 @@ class _RouterState extends State<Router> {
     super.initState();
     // Initialize PageController without an initial page
     // We'll set it based on the provider once the context is available
-    _pageController = PageController(initialPage: 0);
+    _pageController = PageController(
+        initialPage: Provider.of<PageProvider>(context, listen: false).selectedIndex);
   }
 
   @override

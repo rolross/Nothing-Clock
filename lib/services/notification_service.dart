@@ -1,62 +1,76 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
+import 'package:nothing_clock/screens/alarm_ring_screen.dart';
 
-/// A service class to handle notification-related functionalities, including
-/// initializing the notification plugin, showing full-screen notifications,
-/// and checking/requesting notification permissions.
 class NotificationService {
+  static final _plugin = FlutterLocalNotificationsPlugin();
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  static bool _ringShowing = false;
 
-  /// A singleton instance of the FlutterLocalNotificationsPlugin used for
-  /// managing local notifications.
-  static final _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-
-  /// Initializes the local notifications plugin.
-  ///
-  /// This method sets up the plugin with the required Android initialization
-  /// settings (using the app icon specified in `@mipmap/ic_launcher`) and a
-  /// callback for when a notification response is received. If the payload is
-  /// "alarm_triggered", it prints a debug message.
   static Future<void> initialize() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher'); // your app icon
-
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-
-    await _flutterLocalNotificationsPlugin.initialize(initializationSettings, onDidReceiveNotificationResponse: (details) {
-      final payload = details.payload;
-      if(payload == "alarm_triggered") {
-        debugPrint("Alarm triggered!");
-      }
-    },);
+    const AndroidInitializationSettings settings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _plugin.initialize(const InitializationSettings(android: settings));
   }
 
-  /// Shows a full-screen notification.
-  ///
-  /// The notification is configured with high priority and importance, as well
-  /// as a full-screen intent. This is typically used to alert the user (e.g.,
-  /// when an alarm triggers) even when the device is locked or the app is in the
-  /// background.
-  ///
-  /// - Parameters:
-  ///   - id: A unique identifier for the notification.
-  ///   - title: The title of the notification.
-  ///   - body: The body content of the notification.
-  static Future<void> showFullScreenNotification({required int id, required String title, required String body}) async {
-    const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
-        'full_screen_channel', 'Full Screen Notifications', channelDescription: 'Channel for full screen notifications',
-        priority: Priority.high,
-        importance: Importance.max,
-        fullScreenIntent: true,
-        ticker: "ticker",
-        styleInformation: BigTextStyleInformation(''));
-    const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
-    await _flutterLocalNotificationsPlugin.show(
-        id,
-        title,
-        body,
-        platformChannelSpecifics,
-        payload: "alarm_triggered");
+  /// Muestra la pantalla de alarma/timer a partir de los datos nativos.
+  static void handleRing(Map<String, dynamic> ring) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 400), () => _openRing(ring));
+    });
+  }
+
+  static void _openRing(Map<String, dynamic> ring) {
+    final nav = navigatorKey.currentState;
+    if (nav == null || _ringShowing) return;
+    _ringShowing = true;
+    nav
+        .push(MaterialPageRoute(
+          builder: (_) => AlarmRingScreen(
+            notificationId: (ring['id'] as num?)?.toInt() ?? 0,
+            time: (ring['time'] as String?) ?? '',
+            label: (ring['label'] as String?) ?? '',
+            isTimer: ring['kind'] == 'timer',
+          ),
+        ))
+        .then((_) {
+      _ringShowing = false;
+    });
+  }
+
+  static Future<void> cancelId(int id) async {
+    await initialize();
+    await _plugin.cancel(id);
+  }
+
+  static Future<void> cancelTimerRunning() => cancelId(4243);
+
+  static Future<void> showTimerRunning({required String name, required DateTime end}) async {
+    await initialize();
+    await AppLocale.init();
+    final details = AndroidNotificationDetails(
+      'timer_running',
+      'Timer',
+      channelDescription: 'Running timer',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+      playSound: false,
+      enableVibration: false,
+      showWhen: true,
+      when: end.millisecondsSinceEpoch,
+      usesChronometer: true,
+      chronometerCountDown: true,
+    );
+    await _plugin.show(
+      4243,
+      name.isEmpty ? tr('Timer') : name,
+      tr('Time remaining'),
+      NotificationDetails(android: details),
+      payload: 'timer_running',
+    );
   }
 }

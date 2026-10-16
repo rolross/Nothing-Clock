@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:nothing_clock/providers/clock_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nothing_clock/services/sync_service.dart';
 
 /// This provider manages a list of world clocks and updates their times
 /// based on a native event channel that emits time tick events.
@@ -18,14 +19,22 @@ class WorldClocksProvider with ChangeNotifier {
 
     // Subscription to the time tick stream.
   StreamSubscription<dynamic>? _timeTickSubscription;
+  Timer? _secondsTimer;
+  bool _showSeconds = false;
+  bool get showSeconds => _showSeconds;
 
   WorldClocksProvider(BuildContext context) {
     _initialize();
     _subscribeToTimeTick(context);
+    SyncService.remoteApplied.addListener(_onRemoteApplied);
   }
 
   /// Asynchronously initializes the world clocks by fetching their time data.
   Future<void> _initialize() async {
+    final prefsSeconds = await SharedPreferences.getInstance();
+    _showSeconds = prefsSeconds.getBool('show_seconds') ?? false;
+    WorldClockData.showSeconds = _showSeconds;
+    _updateSecondsTimer();
     await _loadWorldClocks();
     await _fetchInitialTimeData(); 
     notifyListeners();
@@ -46,6 +55,7 @@ class WorldClocksProvider with ChangeNotifier {
             longitude: clockData['longitude'] ?? 0.0,
             latitude: clockData['latitude'] ?? 0.0,
             displayName: clockData['displayName'] ?? "Unknown",
+            timezoneId: clockData['timezoneId'],
           );
         }).toList();
         
@@ -68,10 +78,12 @@ class WorldClocksProvider with ChangeNotifier {
           'longitude': clock.longitude,
           'latitude': clock.latitude,
           'displayName': clock.displayName,
+          'timezoneId': clock.timezoneId,
         });
       }).toList();
       
       await prefs.setStringList('world_clocks', worldClockStrings);
+      SyncService.markDirty();
       debugPrint("Saved ${worldClockStrings.length} world clocks to storage");
     } catch (e) {
       debugPrint("Error saving world clocks: $e");
@@ -84,10 +96,12 @@ class WorldClocksProvider with ChangeNotifier {
       // Fetch the UTC offset for the given continent and capital.
       final response = await _fetchUtcTimezone(worldClock.latitude, worldClock.longitude);
       worldClock.utc = response.utcOffset;
+      worldClock.timezoneId = _lastTimezoneId ?? worldClock.timezoneId;
 
       // Recalculate the clock's time offset based on the new UTC value and the standard UTC time.
       worldClock.calculateTimeOffset();
     }
+    await _saveWorldClocks();
 
     notifyListeners();
   }
@@ -108,7 +122,37 @@ class WorldClocksProvider with ChangeNotifier {
   @override
   void dispose() {
     _timeTickSubscription?.cancel();
+    SyncService.remoteApplied.removeListener(_onRemoteApplied);
+    _secondsTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> setShowSeconds(bool value) async {
+    _showSeconds = value;
+    WorldClockData.showSeconds = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('show_seconds', value);
+    SyncService.markDirty();
+    _updateSecondsTimer();
+    updateWorldClocks();
+  }
+
+  void _updateSecondsTimer() {
+    _secondsTimer?.cancel();
+    _secondsTimer = null;
+    if (_showSeconds) {
+      _secondsTimer = null;
+    }
+  }
+
+  Future<void> _onRemoteApplied() async {
+    final prefs = await SharedPreferences.getInstance();
+    _showSeconds = prefs.getBool('show_seconds') ?? false;
+    WorldClockData.showSeconds = _showSeconds;
+    _updateSecondsTimer();
+    await _loadWorldClocks();
+    await _fetchInitialTimeData();
+    notifyListeners();
   }
 
   /// Updates all world clocks by recalculating their time offsets.
@@ -123,24 +167,38 @@ class WorldClocksProvider with ChangeNotifier {
 
   /// Fetches the UTC timezone data for the given coordinates.
   /// Returns a TimezoneData object containing the UTC offset.
+  String? _lastTimezoneId;
+
   Future<TimezoneData> _fetchUtcTimezone(double latitude, double longitude) async {
+    _lastTimezoneId = null;
+    int offset = 0;
     try {
-      final response = await http.get(Uri.parse(
-        'http://api.geonames.org/timezoneJSON?lat=$latitude&lng=$longitude&username=sashachverenko'));
-
-    
-    debugPrint("Fetched time for $latitude/$longitude");
-    final jsonData = jsonDecode(response.body);
-
-    final int utcOffset = jsonData['gmtOffset'];
-
-    return TimezoneData(
-      utcOffset: utcOffset
-    );
-    } catch(e) {
-      debugPrint("Error fetching time: $e");
-      return TimezoneData(utcOffset: 0);
+      final response = await http
+          .get(Uri.parse(
+              'https://secure.geonames.org/timezoneJSON?lat=$latitude&lng=$longitude&username=sashachverenko'))
+          .timeout(const Duration(seconds: 10));
+      final jsonData = jsonDecode(response.body);
+      _lastTimezoneId = jsonData['timezoneId'] as String?;
+      final num raw = (jsonData['dstOffset'] ?? jsonData['gmtOffset'] ?? 0) as num;
+      offset = raw.round();
+    } catch (e) {
+      debugPrint("Error fetching time (geonames): $e");
     }
+
+    if (_lastTimezoneId == null) {
+      try {
+        final response = await http
+            .get(Uri.parse(
+                'https://timeapi.io/api/TimeZone/coordinate?latitude=$latitude&longitude=$longitude'))
+            .timeout(const Duration(seconds: 10));
+        final jsonData = jsonDecode(response.body);
+        _lastTimezoneId = jsonData['timeZone'] as String?;
+      } catch (e) {
+        debugPrint("Error fetching time (timeapi): $e");
+      }
+    }
+
+    return TimezoneData(utcOffset: offset);
   }
 
   /// Checks if a world clock with similar coordinates already exists.
@@ -170,6 +228,7 @@ class WorldClocksProvider with ChangeNotifier {
     
     TimezoneData timezoneData = await _fetchUtcTimezone(worldClock.latitude, worldClock.longitude);
     worldClock.utc = timezoneData.utcOffset;
+    worldClock.timezoneId = _lastTimezoneId;
     worldClock.calculateTimeOffset();
     
     _worldClocks.add(worldClock);

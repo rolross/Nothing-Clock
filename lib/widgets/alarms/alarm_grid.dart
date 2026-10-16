@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:nothing_clock/models/alarm.dart';
 import 'package:nothing_clock/providers/theme_provider.dart';
 import 'package:nothing_clock/widgets/alarms/alarm_form_bottom_sheet.dart';
@@ -19,7 +20,12 @@ class AlarmGrid extends StatelessWidget {
   /// Callback when a new alarm is added
   final Function(Alarm) onAddAlarm;
 
+  final void Function(Alarm, DateTime, Map<String, bool>, String) onEditAlarm;
+  final Function(Alarm) onDeleteAlarm;
+
   const AlarmGrid({
+    required this.onEditAlarm,
+    required this.onDeleteAlarm,
     super.key, 
     required this.alarms, 
     required this.blockSize,
@@ -48,9 +54,19 @@ class AlarmGrid extends StatelessWidget {
         }
         // Render a single alarm block.
         return AlarmBlock(
-          alarm: alarms[idx], 
+          key: ValueKey('${alarms[idx].id}-${alarms[idx].time}-${alarms[idx].isEnabled}-${alarms[idx].days}-${alarms[idx].uiRev}'),
+          alarm: alarms[idx],
           blockSize: blockSize,
           onToggle: () => onToggleAlarm(alarms[idx]),
+          onTap: () => showModalBottomSheet<void>(
+            context: ctx,
+            isScrollControlled: true,
+            builder: (_) => AlarmFormBottomSheet(
+              alarm: alarms[idx],
+              onUpdate: (t, d, l) => onEditAlarm(alarms[idx], t, d, l),
+              onDelete: () => onDeleteAlarm(alarms[idx]),
+            ),
+          ),
         );
       },
     );
@@ -121,7 +137,10 @@ class AlarmBlock extends StatelessWidget {
   /// Callback when the alarm is toggled
   final VoidCallback onToggle;
 
+  final VoidCallback onTap;
+
   const AlarmBlock({
+    required this.onTap,
     super.key, 
     required this.alarm, 
     required this.blockSize,
@@ -140,9 +159,11 @@ class AlarmBlock extends StatelessWidget {
     // Compute display of selected days or 'EVERYDAY'.
     const daysOrder = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
     final activeDays = daysOrder.where((d) => alarm.days[d] ?? false).toList();
-    final daysText = activeDays.isEmpty ? "EVERYDAY" : activeDays.join(", ");
+    final daysText = activeDays.isEmpty ? tr("ONCE") : activeDays.map(tr).join(", ");
 
-    return Container(
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
       width: blockSize,
       height: blockSize,
       decoration: BoxDecoration(
@@ -160,6 +181,13 @@ class AlarmBlock extends StatelessWidget {
                       ?.copyWith(color: Colors.white)),
               const SizedBox(height: 10),
               Text(daysText, style: TextStyle(color: theme.colorScheme.onTertiary)),
+              if (alarm.label.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(alarm.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white)),
+              ],
             ],
           ),
           // Bottom switch to enable/disable alarm
@@ -181,6 +209,6 @@ class AlarmBlock extends StatelessWidget {
           ),
         ]),
       ),
-    );
+    ));
   }
 } 

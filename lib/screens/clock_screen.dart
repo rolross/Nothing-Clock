@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
@@ -38,7 +39,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     });
 
     _loadAlarms();
-    PermissionManager().requestMultiplePermissions();
+    // El permiso de ubicación lo pide LocationManager
   }
 
   @override
@@ -57,7 +58,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   void _loadAlarms() async {
     final alarms = await AlarmsService().loadAlarms();
     setState(() {
-      numberOfAlarms = alarms.length;
+      numberOfAlarms = alarms.where((a) => !a.isSleep).length;
     });
   }
 
@@ -76,9 +77,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         context: context,
         builder: (context) {
           return AlertDialog(
-            title: const Text("Alarm Permission Required"),
-            content: const Text(
-                "To schedule alarms, please enable the SCHEDULE_EXACT_ALARM permission in your system settings."),
+            title: Text(tr("Alarm Permission Required")),
+            content: Text(tr(
+                "To schedule alarms, please enable the SCHEDULE_EXACT_ALARM permission in your system settings.")),
             actions: [
               TextButton(
                   onPressed: () {
@@ -86,7 +87,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     Navigator.pop(context);
                     debugPrint("Opening exact alarm settings");
                   },
-                  child: const Text("Go to settings"))
+                  child: Text(tr("Go to settings")))
             ],
           );
         },
@@ -98,7 +99,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     ThemeData theme = Theme.of(context);
     DateTime now = DateTime.now();
-    String formattedDate = DateFormat("EEE, MMM dd").format(now);
+    String formattedDate = DateFormat("EEE, MMM dd", AppLocale.code).format(now);
 
     double cellPadding = 10;
     double clockContainerSize =
@@ -138,12 +139,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     outlineColor: themeProvider.isDarkMode
                         ? null
                         : theme.colorScheme.onSurface,
-                    color: themeProvider.isDarkMode
-                        ? theme.colorScheme.secondary
-                        : Colors.transparent,
-                    foregroundColor: theme.colorScheme.onSecondary,
+                    color: themeProvider.isDarkMode ? Colors.white : Colors.transparent,
+                    foregroundColor: themeProvider.isDarkMode ? Colors.black : theme.colorScheme.onSecondary,
                     text:
-                        "$numberOfAlarms ${numberOfAlarms <= 1 ? "Alarm" : "Alarms"}",
+                        "$numberOfAlarms ${numberOfAlarms <= 1 ? tr("Alarm") : tr("Alarms")}",
                     icon: FontAwesomeIcons.chevronRight,
                     onTap: () {
                       print("Go to alarms");
@@ -156,7 +155,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                 height: 20,
               ),
               SizedBox(
-                  height: clockContainerSize * 2 + 120,
+                  height: ((worldClocksProvider.worldClocks.length + 1) ~/ 2) * (clockContainerSize + 10),
                   child: GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
@@ -216,16 +215,30 @@ class _LocationInfoState extends State<LocationInfo> {
               return LoadingAnimationWidget.horizontalRotatingDots(
                   color: theme.colorScheme.onSurface, size: 15);
             } else if (snapshot.hasError ||
-                locationManager.currentPosition?.placemark?.locality == null) {
+                locationManager.currentPosition?.latitude == null) {
               debugPrint("Error: ${snapshot.error}");
               debugPrint(
                   "Place: ${locationManager.currentPosition?.placemark}");
-              return const Text("No location available");
+              return GestureDetector(
+                onTap: () async {
+                  await locationManager.refresh();
+                  if (locationManager.currentPosition?.latitude == null) {
+                    await locationManager.openSettingsIfBlocked();
+                  }
+                  if (mounted) setState(() {});
+                },
+                child: Text(
+                  locationManager.lastError == null
+                      ? tr("No location available")
+                      : '${tr("No location available")}\n${locationManager.lastError}',
+                  textAlign: TextAlign.center,
+                ),
+              );
             } else {
               return Column(
                 children: [
                   Text(
-                    "${locationManager.currentPosition?.placemark?.locality} | UTC ${locationManager.currentPosition?.utcOffset}",
+                    "${locationManager.currentPosition?.placemark?.locality ?? tr('Unknown location')} | UTC ${locationManager.currentPosition?.utcOffset}",
                     style: const TextStyle(fontSize: 16),
                   ),
                   Text(

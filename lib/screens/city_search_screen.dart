@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:nothing_clock/l10n/app_locale.dart';
 import 'package:http/http.dart' as http;
 import 'package:nothing_clock/models/world_clock_data.dart';
 import 'package:nothing_clock/providers/worldclocks_provider.dart';
@@ -54,14 +55,14 @@ class _CitySearchScreenState extends State<CitySearchScreen> {
         setState(() {
           _suggestions = [];
           _isLoading = false;
-          _errorMessage = "Failed to load cities. Please try again.";
+          _errorMessage = tr("Failed to load cities. Please try again.");
         });
       }
     } catch (e) {
       setState(() {
         _suggestions = [];
         _isLoading = false;
-        _errorMessage = "Network error. Please check your connection.";
+        _errorMessage = tr("Network error. Please check your connection.");
       });
     }
   }
@@ -120,7 +121,7 @@ class _CitySearchScreenState extends State<CitySearchScreen> {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text("${worldClock.displayName} is already added to your world clocks"),
+                  content: Text("${worldClock.displayName} ${tr("is already added to your world clocks")}"),
                   duration: const Duration(seconds: 2),
                 )
               );
@@ -146,9 +147,7 @@ class _CitySearchScreenState extends State<CitySearchScreen> {
       appBar: AppBar(
         title: TextField(
           controller: _controller,
-          decoration: const InputDecoration(
-            labelText: 'Enter a city name',
-          ),
+          decoration: InputDecoration(labelText: tr('Enter a city name')),
           onChanged:(value) {
             _onSearchChanged(value);
           },
@@ -160,7 +159,7 @@ class _CitySearchScreenState extends State<CitySearchScreen> {
             ? Center(child: Text(_errorMessage!))
             : _suggestions.isNotEmpty 
                 ? _buildSuggestionsList() 
-                : const Center(child: Text("Search for a city")),
+                : Center(child: Text(tr("Search for a city"))),
     );
   }
 }
