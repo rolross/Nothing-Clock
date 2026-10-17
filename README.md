@@ -4,7 +4,7 @@
 
 # Nothing Clock
 
-### Welcome to the official repository for the Nothing Clock app! <br />
+### Welcome to the fork repository for the Nothing Clock app! <br />
 Nothing Clock is a beautifully designed clock application inspired by the minimalist and distinctive style of Nothing design. It offers a variety of features including a basic clock, stopwatch, alarm, and the ability to handle multiple time zones.
 
 ![Nothing_Clock_-_Open_Source_Project](https://github.com/user-attachments/assets/8bb22142-30fd-4d0b-8ca7-28458238d862)
@@ -14,6 +14,7 @@ Features:
 - Stopwatch: Measure time intervals with precision.
 - Alarm: Set alarms for your important events and daily reminders.
 - World Clock: Keep track of multiple time zones easily.
+- Nextcloud sync
 
 Getting Started
 Prerequisites
